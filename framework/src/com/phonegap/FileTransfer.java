@@ -18,10 +18,7 @@
 */
 package com.phonegap;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -41,11 +38,18 @@ import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.mime.MultipartEntity;
+import org.apache.http.entity.mime.content.FileBody;
+import org.apache.http.entity.mime.content.StringBody;
+import org.apache.http.impl.client.DefaultHttpClient;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import android.net.Uri;
 import android.util.Log;
 import android.webkit.CookieManager;
 
@@ -55,24 +59,17 @@ import com.phonegap.api.PluginResult;
 public class FileTransfer extends Plugin {
 
     private static final String LOG_TAG = "FileTransfer";
-    private static final String LINE_START = "--";
-    private static final String LINE_END = "\r\n";
-    private static final String BOUNDRY =  "*****";
-
     public static int FILE_NOT_FOUND_ERR = 1;
     public static int INVALID_URL_ERR = 2;
     public static int CONNECTION_ERR = 3;
-
-    private SSLSocketFactory defaultSSLSocketFactory = null;
-    private HostnameVerifier defaultHostnameVerifier = null;
 
     /* (non-Javadoc)
     * @see com.phonegap.api.Plugin#execute(java.lang.String, org.json.JSONArray, java.lang.String)
     */
     @Override
     public PluginResult execute(String action, JSONArray args, String callbackId) {
-        String source = null;
-        String target = null;
+        String source;
+        String target;
         try {
             source = args.getString(0);
             target = args.getString(1);
@@ -85,9 +82,9 @@ public class FileTransfer extends Plugin {
         try {
             if (action.equals("upload")) {
                 // Setup the options
-                String fileKey = null;
-                String fileName = null;
-                String mimeType = null;
+                String fileKey;
+                String fileName;
+                String mimeType;
 
                 fileKey = getArgument(args, 2, "file");
                 fileName = getArgument(args, 3, "image.jpg");
@@ -95,7 +92,9 @@ public class FileTransfer extends Plugin {
                 JSONObject params = args.optJSONObject(5);
                 boolean trustEveryone = args.optBoolean(6);
                 boolean chunkedMode = args.optBoolean(7);
-                FileUploadResult r = upload(source, target, fileKey, fileName, mimeType, params, trustEveryone, chunkedMode);
+
+                FileUploadResult r = upload(source, target, fileKey, fileName, mimeType, params, trustEveryone,
+		                chunkedMode);
                 Log.d(LOG_TAG, "****** About to return a result from upload");
                 return new PluginResult(PluginResult.Status.OK, r.toJSONObject());
             } else if (action.equals("download")) {
@@ -136,43 +135,6 @@ public class FileTransfer extends Plugin {
     };
 
     /**
-     * This function will install a trust manager that will blindly trust all SSL
-     * certificates.  The reason this code is being added is to enable developers
-     * to do development using self signed SSL certificates on their web server.
-     *
-     * The standard HttpsURLConnection class will throw an exception on self
-     * signed certificates if this code is not run.
-     */
-    private void trustAllHosts() {
-        // Create a trust manager that does not validate certificate chains
-        TrustManager[] trustAllCerts = new TrustManager[] { new X509TrustManager() {
-            public java.security.cert.X509Certificate[] getAcceptedIssuers() {
-                return new java.security.cert.X509Certificate[] {};
-            }
-
-            public void checkClientTrusted(X509Certificate[] chain,
-                            String authType) throws CertificateException {
-            }
-
-            public void checkServerTrusted(X509Certificate[] chain,
-                            String authType) throws CertificateException {
-            }
-        } };
-
-        // Install the all-trusting trust manager
-        try {
-            // Backup the current SSL socket factory
-            defaultSSLSocketFactory = HttpsURLConnection.getDefaultSSLSocketFactory();
-            // Install our all trusting manager
-            SSLContext sc = SSLContext.getInstance("TLS");
-            sc.init(null, trustAllCerts, new java.security.SecureRandom());
-            HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
-        } catch (Exception e) {
-            Log.e(LOG_TAG, e.getMessage(), e);
-        }
-    }
-
-    /**
      * Create an error object based on the passed in errorCode
      * @param errorCode 	the error
      * @return JSONObject containing the error
@@ -211,6 +173,8 @@ public class FileTransfer extends Plugin {
     /**
      * Uploads the specified file to the server URL provided using an HTTP
      * multipart request.
+     * This implementation does not support debug mode (trustEveryone doesn't matter) and chunked mode.
+     *
      * @param file      Full path of the file on the file system
      * @param server        URL of the server to receive the file
      * @param fileKey       Name of file request parameter
@@ -220,153 +184,102 @@ public class FileTransfer extends Plugin {
      * @return FileUploadResult containing result of upload request
      */
     public FileUploadResult upload(String file, String server, final String fileKey, final String fileName,
-            final String mimeType, JSONObject params, boolean trustEveryone, boolean chunkedMode) throws IOException, SSLException {
+            final String mimeType, JSONObject params, boolean trustEveryone, boolean chunkedMode)
+		    throws IOException, SSLException {
+
+	    if(Log.isLoggable(LOG_TAG, Log.DEBUG)) {
+		    Log.d(LOG_TAG, String.format("Uploading %s to $s. FileKey is %s, fileName is %s, mimeType is %s",
+				    file, server, fileKey, fileName, mimeType));
+	    }
+
         // Create return object
         FileUploadResult result = new FileUploadResult();
 
-        // Get a input stream of the file on the phone
-        InputStream fileInputStream = getPathFromUri(file);
+	    HttpClient httpclient = new DefaultHttpClient();
 
-        HttpURLConnection conn = null;
-        DataOutputStream dos = null;
+	    try {
+	        HttpPost httpPost = new HttpPost(server);
 
-        int bytesRead, bytesAvailable, bufferSize;
-        long totalBytes;
-        byte[] buffer;
-        int maxBufferSize = 8096;
+		     // setting cookies
+			String cookie = CookieManager.getInstance().getCookie(server);
+			if (cookie != null) {
+				httpPost.setHeader("Cookie", cookie);
+			}
 
-        //------------------ CLIENT REQUEST
-        // open a URL connection to the server
-        URL url = new URL(server);
+		    MultipartEntity multipartEntity = new MultipartEntity();
 
-        // Open a HTTP connection to the URL based on protocol
-        if (url.getProtocol().toLowerCase().equals("https")) {
-            // Using standard HTTPS connection. Will not allow self signed certificate
-            if (!trustEveryone) {
-                conn = (HttpsURLConnection) url.openConnection();
-            }
-            // Use our HTTPS connection that blindly trusts everyone.
-            // This should only be used in debug environments
-            else {
-                // Setup the HTTPS connection class to trust everyone
-                trustAllHosts();
-                HttpsURLConnection https = (HttpsURLConnection) url.openConnection();
-                // Save the current hostnameVerifier
-                defaultHostnameVerifier = https.getHostnameVerifier();
-                // Setup the connection not to verify hostnames
-                https.setHostnameVerifier(DO_NOT_VERIFY);
-                conn = https;
-            }
-        }
-        // Return a standard HTTP connection
-        else {
-            conn = (HttpURLConnection) url.openConnection();
-        }
+		    // adding file
+		    FileBody fileBody = new FileBody(getFile(file), fileName, mimeType, null);
+			multipartEntity.addPart(fileKey, fileBody);
 
-        // Allow Inputs
-        conn.setDoInput(true);
+		    // adding parameters
+		    for(Iterator it = params.keys(); it.hasNext();) {
+			    String key = it.next().toString();
 
-        // Allow Outputs
-        conn.setDoOutput(true);
+			    multipartEntity.addPart(key, new StringBody(params.getString(key)));
+		    }
 
-        // Don't use a cached copy.
-        conn.setUseCaches(false);
+		    httpPost.setEntity(multipartEntity);
 
-        // Use a post method.
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Connection", "Keep-Alive");
-        conn.setRequestProperty("Content-Type", "multipart/form-data;boundary="+BOUNDRY);
+		    // executing
+		    HttpResponse response = httpclient.execute(httpPost);
 
-        // Set the cookies on the response
-        String cookie = CookieManager.getInstance().getCookie(server);
-        if (cookie != null) {
-            conn.setRequestProperty("Cookie", cookie);
-        }
+		    // reading response
+		    String responseString = "";
+		    HttpEntity responseEntity = response.getEntity();
+		    if(responseEntity != null) {
+			    InputStream is = responseEntity.getContent();
 
-        // Should set this up as an option
-        if (chunkedMode) {
-            conn.setChunkedStreamingMode(maxBufferSize);
-        }
+			    try {
+					// converting the stream to a string
+					// from http://weblogs.java.net/blog/pat/archive/2004/10/stupid_scanner_1.html
+					responseString = new java.util.Scanner(is).useDelimiter("\\A").next();
+				} catch (java.util.NoSuchElementException ignore) {
+			    } finally {
+				    is.close();
+			    }
+		    }
 
-        dos = new DataOutputStream( conn.getOutputStream() );
+		    if(Log.isLoggable(LOG_TAG, Log.DEBUG)) {
+				Log.d(LOG_TAG, String.format("Got response from server: %s", responseString));
+		    }
 
-        // Send any extra parameters
-        try {
-            for (Iterator iter = params.keys(); iter.hasNext();) {
-                Object key = iter.next();
-                dos.writeBytes(LINE_START + BOUNDRY + LINE_END);
-                dos.writeBytes("Content-Disposition: form-data; name=\"" +  key.toString() + "\";");
-                dos.writeBytes(LINE_END + LINE_END);
-                dos.write(params.getString(key.toString()).getBytes());
-                dos.writeBytes(LINE_END);
-            }
-        } catch (JSONException e) {
-            Log.e(LOG_TAG, e.getMessage(), e);
-        }
+            result.setResponseCode(response.getStatusLine().getStatusCode());
+		    result.setResponse(responseString);
 
-        dos.writeBytes(LINE_START + BOUNDRY + LINE_END);
-        dos.writeBytes("Content-Disposition: form-data; name=\"" + fileKey + "\";" + " filename=\"" + fileName +"\"" + LINE_END);
-        dos.writeBytes("Content-Type: " + mimeType + LINE_END);
-        dos.writeBytes(LINE_END);
+	    } catch (JSONException e) {
+		    Log.e(LOG_TAG, "JSON error", e);
+		    throw new IOException(e);
+	    } finally {
+		    try {
+				httpclient.getConnectionManager().shutdown();
+		    } catch (Exception ignore) {}
+	    }
 
-        // create a buffer of maximum size
-        bytesAvailable = fileInputStream.available();
-        bufferSize = Math.min(bytesAvailable, maxBufferSize);
-        buffer = new byte[bufferSize];
-
-        // read file and write it into form...
-        bytesRead = fileInputStream.read(buffer, 0, bufferSize);
-        totalBytes = 0;
-
-        while (bytesRead > 0) {
-            totalBytes += bytesRead;
-            result.setBytesSent(totalBytes);
-            dos.write(buffer, 0, bufferSize);
-            bytesAvailable = fileInputStream.available();
-            bufferSize = Math.min(bytesAvailable, maxBufferSize);
-            bytesRead = fileInputStream.read(buffer, 0, bufferSize);
-        }
-
-        // send multipart form data necesssary after file data...
-        dos.writeBytes(LINE_END);
-        dos.writeBytes(LINE_START + BOUNDRY + LINE_START + LINE_END);
-
-        // close streams
-        fileInputStream.close();
-        dos.flush();
-        dos.close();
-
-        //------------------ read the SERVER RESPONSE
-        StringBuffer responseString = new StringBuffer("");
-        DataInputStream inStream;
-        try {
-            inStream = new DataInputStream ( conn.getInputStream() );
-        } catch(FileNotFoundException e) {
-            throw new IOException("Received error from server");
-        }
-
-        String line;
-        while (( line = inStream.readLine()) != null) {
-            responseString.append(line);
-        }
-        Log.d(LOG_TAG, "got response from server");
-        Log.d(LOG_TAG, responseString.toString());
-
-        // send request and retrieve response
-        result.setResponseCode(conn.getResponseCode());
-        result.setResponse(responseString.toString());
-
-        inStream.close();
-        conn.disconnect();
-
-        // Revert back to the proper verifier and socket factories
-        if (trustEveryone && url.getProtocol().toLowerCase().equals("https")) {
-            ((HttpsURLConnection)conn).setHostnameVerifier(defaultHostnameVerifier);
-            HttpsURLConnection.setDefaultSSLSocketFactory(defaultSSLSocketFactory);
-        }
-
-        return result;
+	    return result;
     }
+
+	/**
+	 * Get a file object from a given path
+	 * @param path Full path of the file on the file system
+	 * @return the file object
+	 */
+	private File getFile(String path) {
+		if (path.startsWith("content:")) {
+            throw new UnsupportedOperationException("content: protocol is not supported");
+        }
+
+		if (path.startsWith("file://")) {
+            int question = path.indexOf("?");
+            if (question == -1) {
+                return new File(path.substring(7));
+            } else {
+                return new File(path.substring(7, question));
+            }
+        } else {
+            return new File(path);
+        }
+	}
 
     /**
      * Downloads a file form a given URL and saves it to the specified directory.
@@ -414,30 +327,4 @@ public class FileTransfer extends Plugin {
             throw new IOException("Error while downloading");
         }
     }
-
-    /**
-     * Get an input stream based on file path or content:// uri
-     *
-     * @param path
-     * @return an input stream
-     * @throws FileNotFoundException
-     */
-    private InputStream getPathFromUri(String path) throws FileNotFoundException {
-        if (path.startsWith("content:")) {
-            Uri uri = Uri.parse(path);
-            return ctx.getContentResolver().openInputStream(uri);
-        }
-        else if (path.startsWith("file://")) {
-            int question = path.indexOf("?");
-            if (question == -1) {
-                return new FileInputStream(path.substring(7));
-            } else {
-                return new FileInputStream(path.substring(7, question));
-            }
-        }
-        else {
-            return new FileInputStream(path);
-        }
-    }
-
 }
