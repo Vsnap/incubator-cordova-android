@@ -58,7 +58,7 @@ public class Capture extends Plugin {
     
     private String callbackId;                      // The ID of the callback to be invoked with our result
     private long limit;                             // the number of pics/vids/clips to take
-    private double duration;                        // optional duration parameter for video recording
+    private int duration;                        // optional duration parameter for video recording
     private JSONArray results;                      // The array of results to be returned to the user
     private Uri imageUri;                           // Uri of captured image 
 
@@ -66,13 +66,13 @@ public class Capture extends Plugin {
     public PluginResult execute(String action, JSONArray args, String callbackId) {
         this.callbackId = callbackId;
         this.limit = 1;
-        this.duration = 0.0f;
+        this.duration = 0;
         this.results = new JSONArray();
         
         JSONObject options = args.optJSONObject(0);
         if (options != null) {
             limit = options.optLong("limit", 1);
-            duration = options.optDouble("duration", 0.0f);
+            duration = options.optInt("duration", 0);
         }
 
         if (action.equals("getFormatData")) {
@@ -167,7 +167,7 @@ public class Capture extends Plugin {
         try {
             player.setDataSource(filePath);
             player.prepare();
-            obj.put("duration", player.getDuration());
+            obj.put("duration", player.getDuration()/1000);
             if (video) {
                 obj.put("height", player.getVideoHeight());
                 obj.put("width", player.getVideoWidth());
@@ -205,10 +205,10 @@ public class Capture extends Plugin {
     /**
      * Sets up an intent to capture video.  Result handled by onActivityResult()
      */
-    private void captureVideo(double duration) {
+    private void captureVideo(int duration) {
         Intent intent = new Intent(android.provider.MediaStore.ACTION_VIDEO_CAPTURE);
         // Introduced in API 8
-        //intent.putExtra(android.provider.MediaStore.EXTRA_DURATION_LIMIT, duration);
+        intent.putExtra(android.provider.MediaStore.EXTRA_DURATION_LIMIT, duration);
         
         this.ctx.startActivityForResult((Plugin) this, intent, CAPTURE_VIDEO);
     }
