@@ -25,18 +25,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.security.cert.CertificateException;
-import java.security.cert.X509Certificate;
 import java.util.Iterator;
 
-import javax.net.ssl.HostnameVerifier;
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLException;
-import javax.net.ssl.SSLSession;
-import javax.net.ssl.SSLSocketFactory;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
@@ -127,14 +118,7 @@ public class FileTransfer extends Plugin {
         }
     }
 
-    // always verify the host - don't check for certificate
-    final static HostnameVerifier DO_NOT_VERIFY = new HostnameVerifier() {
-        public boolean verify(String hostname, SSLSession session) {
-            return true;
-        }
-    };
-
-    /**
+	/**
      * Create an error object based on the passed in errorCode
      * @param errorCode 	the error
      * @return JSONObject containing the error
@@ -185,7 +169,7 @@ public class FileTransfer extends Plugin {
      */
     public FileUploadResult upload(String file, String server, final String fileKey, final String fileName,
             final String mimeType, JSONObject params, boolean trustEveryone, boolean chunkedMode)
-		    throws IOException, SSLException {
+		    throws IOException {
 
 	    if(Log.isLoggable(LOG_TAG, Log.DEBUG)) {
 		    Log.d(LOG_TAG, String.format("Uploading %s to $s. FileKey is %s, fileName is %s, mimeType is %s",
@@ -305,7 +289,7 @@ public class FileTransfer extends Plugin {
 
             InputStream inputStream = connection.getInputStream();
             byte[] buffer = new byte[1024];
-            int bytesRead = 0;
+            int bytesRead;
 
             FileOutputStream outputStream = new FileOutputStream(file);
 
