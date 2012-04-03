@@ -153,6 +153,13 @@ public class ContactAccessorSdk5 extends ContactAccessor {
       } catch (JSONException e) {
         // Multiple was not specified so we assume the default is true.
       }
+
+	    try {
+		    limit = options.getInt("limit");
+	    }
+	    catch (JSONException e) {
+		    // Limit was not specified
+	    }
     }
     else {
       searchTerm = "%";
@@ -173,7 +180,7 @@ public class ContactAccessorSdk5 extends ContactAccessor {
         new String[] { ContactsContract.Data.CONTACT_ID },
         whereOptions.getWhere(),
         whereOptions.getWhereArgs(),
-        ContactsContract.Data.CONTACT_ID + " ASC");       
+        buildSortOrder(limit));       
 
     // Create a set of unique ids
     //Log.d(LOG_TAG, "ID cursor query returns = " + idCursor.getCount());
@@ -399,6 +406,15 @@ public class ContactAccessorSdk5 extends ContactAccessor {
         
     return options;
   }
+	
+	private String buildSortOrder(int limit) {
+		StringBuilder sortOrder = new StringBuilder();
+		
+		sortOrder.append(ContactsContract.Data.CONTACT_ID).append(" ASC ");
+		sortOrder.append(" LIMIT ").append(limit);
+		
+		return sortOrder.toString();
+	}
 
   /**
    * Create a new contact using a JSONObject to hold all the data. 
